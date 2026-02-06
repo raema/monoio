@@ -165,6 +165,29 @@ impl IoUringDriver {
         Ok(driver)
     }
 
+    /// Register the maximum number of io_uring kernel worker threads.
+    /// `max[0]` = bounded (file/block I/O), `max[1]` = unbounded (socket I/O).
+    /// Uses `IORING_REGISTER_IOWQ_MAX_WORKERS` (opcode 19, kernel 5.15+).
+    pub(crate) fn register_iowq_max_workers(&self, max: &mut [u32; 2]) -> io::Result<()> {
+        const IORING_REGISTER_IOWQ_MAX_WORKERS: libc::c_uint = 19;
+        let inner = unsafe { &*self.inner.get() };
+        let fd = inner.uring.as_raw_fd();
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_io_uring_register,
+                fd as libc::c_long,
+                IORING_REGISTER_IOWQ_MAX_WORKERS as libc::c_long,
+                max.as_mut_ptr() as libc::c_long,
+                2_u32 as libc::c_long,
+            )
+        };
+        if ret < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
     #[allow(unused)]
     fn num_operations(&self) -> usize {
         let inner = self.inner.get();

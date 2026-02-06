@@ -60,7 +60,7 @@ impl Op<Splice> {
 impl OpAble for Splice {
     #[cfg(all(target_os = "linux", feature = "iouring"))]
     fn uring_op(&mut self) -> io_uring::squeue::Entry {
-        const FLAG: u32 = libc::SPLICE_F_MOVE;
+        const FLAG: u32 = libc::SPLICE_F_MOVE | libc::SPLICE_F_NONBLOCK;
         opcode::Splice::new(
             types::Fd(self.fd_in.raw_fd()),
             -1,

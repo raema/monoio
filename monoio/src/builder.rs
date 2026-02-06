@@ -22,6 +22,10 @@ pub struct RuntimeBuilder<D> {
     #[cfg(all(target_os = "linux", feature = "iouring"))]
     urb: io_uring::Builder,
 
+    // Cap io_uring kernel worker threads (bounded, unbounded)
+    #[cfg(all(target_os = "linux", feature = "iouring"))]
+    iowq_max_workers: Option<[u32; 2]>,
+
     // blocking handle
     #[cfg(feature = "sync")]
     blocking_handle: crate::blocking::BlockingHandle,
@@ -61,6 +65,9 @@ impl<T> RuntimeBuilder<T> {
 
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             urb: io_uring::IoUring::builder(),
+
+            #[cfg(all(target_os = "linux", feature = "iouring"))]
+            iowq_max_workers: None,
 
             #[cfg(feature = "sync")]
             blocking_handle: crate::blocking::BlockingStrategy::ExecuteLocal.into(),
@@ -127,12 +134,18 @@ impl Buildable for IoUringDriver {
         let thread_id = gen_id();
         #[cfg(feature = "sync")]
         let blocking_handle = this.blocking_handle;
+        let iowq_max_workers = this.iowq_max_workers;
 
         BUILD_THREAD_ID.set(&thread_id, || {
             let driver = match this.entries {
                 Some(entries) => IoUringDriver::new_with_entries(&this.urb, entries)?,
                 None => IoUringDriver::new(&this.urb)?,
             };
+
+            if let Some(mut max) = iowq_max_workers {
+                driver.register_iowq_max_workers(&mut max)?;
+            }
+
             #[cfg(feature = "sync")]
             let context = crate::runtime::Context::new(blocking_handle);
             #[cfg(not(feature = "sync"))]
@@ -167,6 +180,19 @@ impl<D> RuntimeBuilder<D> {
         self.urb = urb;
         self
     }
+
+    /// Set the maximum number of io_uring kernel worker threads per NUMA node.
+    ///
+    /// `bounded` limits workers for bounded I/O (regular files, block devices).
+    /// `unbounded` limits workers for unbounded I/O (sockets).
+    /// This prevents the kernel from spawning excessive `iou-wrk-*` threads
+    /// when many operations briefly block (e.g. file creates via openat).
+    #[cfg(all(target_os = "linux", feature = "iouring"))]
+    #[must_use]
+    pub fn with_iowq_max_workers(mut self, bounded: u32, unbounded: u32) -> Self {
+        self.iowq_max_workers = Some([bounded, unbounded]);
+        self
+    }
 }
 
 // ===== FusionDriver =====
@@ -184,6 +210,7 @@ impl RuntimeBuilder<FusionDriver> {
             let builder = RuntimeBuilder::<IoUringDriver> {
                 entries: self.entries,
                 urb: self.urb,
+                iowq_max_workers: self.iowq_max_workers,
                 #[cfg(feature = "sync")]
                 blocking_handle: self.blocking_handle,
                 _mark: PhantomData,
@@ -194,6 +221,7 @@ impl RuntimeBuilder<FusionDriver> {
             let builder = RuntimeBuilder::<LegacyDriver> {
                 entries: self.entries,
                 urb: self.urb,
+                iowq_max_workers: self.iowq_max_workers,
                 #[cfg(feature = "sync")]
                 blocking_handle: self.blocking_handle,
                 _mark: PhantomData,
@@ -221,6 +249,7 @@ impl RuntimeBuilder<FusionDriver> {
         let builder = RuntimeBuilder::<IoUringDriver> {
             entries: self.entries,
             urb: self.urb,
+            iowq_max_workers: self.iowq_max_workers,
             #[cfg(feature = "sync")]
             blocking_handle: self.blocking_handle,
             _mark: PhantomData,
@@ -240,6 +269,7 @@ impl RuntimeBuilder<TimeDriver<FusionDriver>> {
             let builder = RuntimeBuilder::<TimeDriver<IoUringDriver>> {
                 entries: self.entries,
                 urb: self.urb,
+                iowq_max_workers: self.iowq_max_workers,
                 #[cfg(feature = "sync")]
                 blocking_handle: self.blocking_handle,
                 _mark: PhantomData,
@@ -250,6 +280,7 @@ impl RuntimeBuilder<TimeDriver<FusionDriver>> {
             let builder = RuntimeBuilder::<TimeDriver<LegacyDriver>> {
                 entries: self.entries,
                 urb: self.urb,
+                iowq_max_workers: self.iowq_max_workers,
                 #[cfg(feature = "sync")]
                 blocking_handle: self.blocking_handle,
                 _mark: PhantomData,
@@ -277,6 +308,7 @@ impl RuntimeBuilder<TimeDriver<FusionDriver>> {
         let builder = RuntimeBuilder::<TimeDriver<IoUringDriver>> {
             entries: self.entries,
             urb: self.urb,
+            iowq_max_workers: self.iowq_max_workers,
             #[cfg(feature = "sync")]
             blocking_handle: self.blocking_handle,
             _mark: PhantomData,
@@ -310,6 +342,8 @@ where
             entries: this.entries,
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             urb: this.urb,
+            #[cfg(all(target_os = "linux", feature = "iouring"))]
+            iowq_max_workers: this.iowq_max_workers,
             #[cfg(feature = "sync")]
             blocking_handle: this.blocking_handle,
             _mark: PhantomData,
@@ -338,6 +372,8 @@ impl<D: time_wrap::TimeWrapable> RuntimeBuilder<D> {
             entries,
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             urb,
+            #[cfg(all(target_os = "linux", feature = "iouring"))]
+            iowq_max_workers,
             #[cfg(feature = "sync")]
             blocking_handle,
             ..
@@ -346,6 +382,8 @@ impl<D: time_wrap::TimeWrapable> RuntimeBuilder<D> {
             entries,
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             urb,
+            #[cfg(all(target_os = "linux", feature = "iouring"))]
+            iowq_max_workers,
             #[cfg(feature = "sync")]
             blocking_handle,
             _mark: PhantomData,
